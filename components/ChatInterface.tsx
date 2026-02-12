@@ -9,6 +9,10 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Card } from "@/components/ui/card"
 import { AvatarMood } from "./Avatars/david"
 import { type LipSyncData, computeTimeline } from "@/lib/lipSync"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+
+type LLMProvider = "ollama" | "groq"
 
 type Message = {
     role: "user" | "assistant"
@@ -31,6 +35,7 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
     const [input, setInput] = useState("")
     const [isLoading, setIsLoading] = useState(false)
     const [voice, setVoice] = useState<SpeechSynthesisVoice | null>(null)
+    const [provider, setProvider] = useState<LLMProvider>("ollama")
     const scrollRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
@@ -140,23 +145,24 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
         setIsLoading(true)
 
         try {
-            const response = await fetch("http://localhost:11434/api/chat", {
+            const response = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    model: "phi:latest",
+                    provider,
+                    model: provider === "ollama" ? "phi:latest" : "llama-3.3-70b-versatile",
                     messages: [...messages, userMessage],
-                    stream: false
                 }),
             })
             const data = await response.json()
-            const textResponse = data.message.content
+            if (data.error) throw new Error(data.error)
+            const textResponse = data.content
             const botMessage: Message = { role: "assistant", content: textResponse }
             setMessages(prev => [...prev, botMessage])
             const script = analyzeText(textResponse)
             playScript(script)
         } catch (error) {
-            const errorMsg = "Connection failed."
+            const errorMsg = error instanceof Error ? error.message : "Connection failed."
             setMessages(prev => [...prev, { role: "assistant", content: errorMsg }])
         } finally {
             setIsLoading(false)
@@ -169,9 +175,33 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
                 <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
                     <Bot className="w-5 h-5 text-primary" />
                 </div>
-                <div>
+                <div className="flex-1">
                     <h2 className="text-sm font-semibold text-foreground">SchoolMe : David</h2>
                     <p className="text-xs text-muted-foreground">{voice ? "Voice Active" : "Loading..."}</p>
+                </div>
+                <div className="flex items-center gap-1 bg-muted/50 rounded-full p-0.5">
+                    <button
+                        type="button"
+                        onClick={() => setProvider("ollama")}
+                        className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                            provider === "ollama"
+                                ? "bg-background text-foreground shadow-sm"
+                                : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                        Ollama
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setProvider("groq")}
+                        className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                            provider === "groq"
+                                ? "bg-background text-foreground shadow-sm"
+                                : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                        Groq
+                    </button>
                 </div>
             </div>
 
@@ -192,7 +222,13 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
                                     </div>
                                 )}
                                 <div className={`rounded-2xl px-5 py-3 text-sm max-w-[85%] shadow-sm ${msg.role === "user" ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-white border border-border text-foreground rounded-tl-none"}`}>
-                                    {msg.content}
+                                    {msg.role === "assistant" ? (
+                                        <div className="prose prose-sm prose-neutral max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_pre]:my-2 [&_pre]:bg-neutral-100 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_code]:text-xs [&_code]:bg-neutral-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_a]:text-primary [&_a]:underline">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                                        </div>
+                                    ) : (
+                                        msg.content
+                                    )}
                                 </div>
                                 {msg.role === "user" && (
                                     <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0 mt-1">
