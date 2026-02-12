@@ -11,9 +11,10 @@ export default function Page() {
     const lipSyncRef = useRef<LipSyncData>(createLipSyncData())
 
     return (
-        <main className="h-screen w-screen bg-background text-foreground p-4 md:p-6 overflow-hidden flex flex-col">
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 h-full w-full max-w-400 mx-auto">
-                <div className="h-full flex flex-col min-h-125">
+        <main className="h-screen w-screen bg-background text-foreground overflow-hidden flex flex-col">
+            <div className="flex-1 flex flex-col lg:grid lg:grid-cols-2 lg:gap-6 lg:p-6 h-full w-full lg:max-w-400 mx-auto relative">
+                {/* Chat panel — full card on desktop, input-only overlay on mobile */}
+                <div className="max-lg:absolute max-lg:bottom-0 max-lg:left-0 max-lg:right-0 max-lg:z-10 lg:flex lg:h-full lg:flex-col lg:min-h-125">
                     <ChatInterface 
                         onTalkingStateChange={setIsTalking} 
                         onMoodChange={setMood}
@@ -21,7 +22,8 @@ export default function Page() {
                     />
                 </div>
 
-                <div className="h-full flex flex-col min-h-125 relative">
+                {/* Avatar panel — full screen on mobile */}
+                <div className="flex-1 flex flex-col relative lg:min-h-125">
                     <DavidModel isTalking={isTalking} mood={mood} lipSyncRef={lipSyncRef} />
                     
                     <div className={`absolute top-4 right-4 px-3 py-1.5 rounded-full text-xs font-medium border transition-all duration-300 ${isTalking ? "bg-green-500/10 border-green-500/20 text-green-600" : "bg-white/80 backdrop-blur-sm border-border text-muted-foreground"}`}>

@@ -41,11 +41,17 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
     useEffect(() => {
         const loadVoices = () => {
             const voices = window.speechSynthesis.getVoices()
-            const preferredVoice = voices.find(v => v.name.includes("David")) || 
-                                   voices.find(v => v.name.includes("Mark")) || 
-                                   voices.find(v => v.name.includes("Male")) || 
-                                   voices[0]
-            setVoice(preferredVoice)
+            // Strict male voice preference chain
+            const maleKeywords = ['David', 'Mark', 'James', 'Daniel', 'George', 'Male']
+            let picked: SpeechSynthesisVoice | undefined
+            for (const kw of maleKeywords) {
+                picked = voices.find(v => v.name.includes(kw) && v.lang.startsWith('en'))
+                if (picked) break
+            }
+            // Fallback: any English voice, then any voice
+            if (!picked) picked = voices.find(v => v.lang.startsWith('en'))
+            if (!picked) picked = voices[0]
+            setVoice(picked ?? null)
         }
         if (window.speechSynthesis.getVoices().length > 0) loadVoices()
         else window.speechSynthesis.onvoiceschanged = loadVoices
@@ -170,8 +176,9 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
     }
 
     return (
-        <Card className="flex flex-col h-full w-full border-border bg-card shadow-sm overflow-hidden rounded-xl">
-            <div className="flex-none pb-4 px-4 border-b border-border flex items-center gap-3">
+        <Card className="flex flex-col h-full w-full border-border bg-card shadow-sm overflow-hidden rounded-xl max-lg:border-0 max-lg:shadow-none max-lg:bg-transparent max-lg:rounded-none">
+            {/* Header + messages: hidden on mobile */}
+            <div className="flex-none pb-4 px-4 border-b border-border flex items-center gap-3 max-lg:hidden">
                 <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
                     <Bot className="w-5 h-5 text-primary" />
                 </div>
@@ -205,7 +212,7 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
                 </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-hidden relative">
+            <div className="flex-1 min-h-0 overflow-hidden relative max-lg:hidden">
                 <ScrollArea className="h-full w-full p-4" ref={scrollRef}>
                     <div className="space-y-6 pb-4">
                         {messages.length === 0 && (
@@ -249,7 +256,18 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
                 </ScrollArea>
             </div>
 
-            <div className="flex-none p-4 bg-card border-t border-border">
+            <div className="flex-none p-3 lg:p-4 max-lg:bg-background/80 max-lg:backdrop-blur-md lg:bg-card lg:border-t border-border">
+                {/* Provider toggle — visible on mobile too */}
+                <div className="flex items-center justify-between mb-2 lg:hidden">
+                    <div className="flex items-center gap-2">
+                        <Bot className="w-4 h-4 text-primary" />
+                        <span className="text-xs font-medium text-foreground">David</span>
+                    </div>
+                    <div className="flex items-center gap-1 bg-muted/50 rounded-full p-0.5">
+                        <button type="button" onClick={() => setProvider("ollama")} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all ${provider === "ollama" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>Ollama</button>
+                        <button type="button" onClick={() => setProvider("groq")} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all ${provider === "groq" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>Groq</button>
+                    </div>
+                </div>
                 <form onSubmit={handleSubmit} className="flex gap-2 items-center relative">
                     <Input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask anything..." className="pr-12 py-6 bg-muted/20 border-border focus-visible:ring-primary/20 rounded-full" disabled={isLoading} />
                     <Button type="submit" disabled={isLoading || !input.trim()} size="icon" className="absolute right-1.5 top-1.5 h-9 w-9 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground"><Send className="w-4 h-4" /></Button>
