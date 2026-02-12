@@ -13,13 +13,37 @@ import { useControls } from 'leva'
 import * as THREE from 'three'
 
 function Model() {
-    const { scene } = useGLTF("/avatars/david.glb")
-    const group = useRef<THREE.Group>(null!)
+    const { scene, nodes } = useGLTF("/avatars/david.glb")
+    const group = useRef<THREE.Group>(null)
 
-    const { mouthOpen, eyeBlink, headSway } = useControls("Animation", {
+    const { 
+        mouthOpen, 
+        blinkLeft, 
+        blinkRight, 
+        headSway,
+        isExplaining
+    } = useControls("Animation", {
         mouthOpen: { value: 0, min: 0, max: 1, step: 0.01 },
-        eyeBlink: { value: 0, min: 0, max: 1, step: 0.01 },
-        headSway: { value: true }
+        blinkLeft: { value: 0, min: 0, max: 1, step: 0.01 },
+        blinkRight: { value: 0, min: 0, max: 1, step: 0.01 },
+        headSway: { value: true },
+        isExplaining: { value: true }
+    })
+
+    const {
+        rightArmZ, rightArmX,
+        rightForeArmZ, rightForeArmY,
+        leftArmZ, leftArmX,
+        leftForeArmZ, leftForeArmY
+    } = useControls("Arm Positioning", {
+        rightArmZ: { value: 0.35, min: -3, max: 3, step: 0.1 },
+        rightArmX: { value: 0.70, min: -3, max: 3, step: 0.1 },
+        rightForeArmZ: { value: -1.75, min: -3, max: 3, step: 0.1 },
+        rightForeArmY: { value: 0.52, min: -3, max: 3, step: 0.1 },
+        leftArmZ: { value: -0.35, min: -3, max: 3, step: 0.1 },
+        leftArmX: { value: 0.70, min: -3, max: 3, step: 0.1 },
+        leftForeArmZ: { value: 1.75, min: -3, max: 3, step: 0.1 },
+        leftForeArmY: { value: -0.52, min: -3, max: 3, step: 0.1 }
     })
 
     useFrame((state) => {
@@ -27,38 +51,42 @@ function Model() {
 
         scene.traverse((child) => {
             if (child instanceof THREE.Mesh && child.morphTargetDictionary && child.morphTargetInfluences) {
+                if (child.name === "Wolf3D_Head" || child.name === "EyeLeft" || child.name === "EyeRight") {
+                    const mL = child.morphTargetDictionary['eyeBlinkLeft']
+                    const mR = child.morphTargetDictionary['eyeBlinkRight']
+                    const mO = child.morphTargetDictionary['mouthOpen'] ?? child.morphTargetDictionary['viseme_aa']
 
-                // 1. Target Eyes (Specific meshes EyeLeft/EyeRight)
-                if (child.name.toLowerCase().includes("eye")) {
-                    const blinkIndex =
-                        child.morphTargetDictionary['eyeBlinkLeft'] ??
-                        child.morphTargetDictionary['eyeBlinkRight'] ??
-                        child.morphTargetDictionary['blink'] ??
-                        child.morphTargetDictionary['eyeBlink'];
-
-                    if (blinkIndex !== undefined) {
-                        child.morphTargetInfluences[blinkIndex] = eyeBlink;
-                    }
+                    if (mL !== undefined) child.morphTargetInfluences[mL] = blinkLeft
+                    if (mR !== undefined) child.morphTargetInfluences[mR] = blinkRight
+                    if (mO !== undefined && child.name === "Wolf3D_Head") child.morphTargetInfluences[mO] = mouthOpen
                 }
 
-                // 2. Target Head (Ready Player Me often duplicates blink here too)
-                if (child.name === "Wolf3D_Head") {
-                    const mouthIndex = child.morphTargetDictionary['mouthOpen'] ?? child.morphTargetDictionary['viseme_aa'];
-                    const blinkL = child.morphTargetDictionary['eyeBlinkLeft'];
-                    const blinkR = child.morphTargetDictionary['eyeBlinkRight'];
-
-                    if (mouthIndex !== undefined) child.morphTargetInfluences[mouthIndex] = mouthOpen;
-                    if (blinkL !== undefined) child.morphTargetInfluences[blinkL] = eyeBlink;
-                    if (blinkR !== undefined) child.morphTargetInfluences[blinkR] = eyeBlink;
-                }
-
-                // 3. Sync Teeth and Beard with Mouth
                 if (child.name === "Wolf3D_Teeth" || child.name === "Wolf3D_Beard") {
-                    const mouthIndex = child.morphTargetDictionary['mouthOpen'] ?? child.morphTargetDictionary['viseme_aa'];
-                    if (mouthIndex !== undefined) child.morphTargetInfluences[mouthIndex] = mouthOpen;
+                    const mO = child.morphTargetDictionary['mouthOpen'] ?? child.morphTargetDictionary['viseme_aa']
+                    if (mO !== undefined) child.morphTargetInfluences[mO] = mouthOpen
                 }
             }
         })
+
+        if (isExplaining) {
+            if (nodes.RightArm) {
+                nodes.RightArm.rotation.z = rightArmZ + Math.sin(t * 1) * 0.05
+                nodes.RightArm.rotation.x = rightArmX + Math.cos(t * 1) * 0.05
+            }
+            if (nodes.RightForeArm) {
+                nodes.RightForeArm.rotation.z = rightForeArmZ + Math.sin(t * 2) * 0.2
+                nodes.RightForeArm.rotation.y = rightForeArmY
+            }
+
+            if (nodes.LeftArm) {
+                nodes.LeftArm.rotation.z = leftArmZ - Math.sin(t * 1) * 0.05
+                nodes.LeftArm.rotation.x = leftArmX + Math.cos(t * 1) * 0.05
+            }
+            if (nodes.LeftForeArm) {
+                nodes.LeftForeArm.rotation.z = leftForeArmZ - Math.sin(t * 2) * 0.2
+                nodes.LeftForeArm.rotation.y = leftForeArmY
+            }
+        }
 
         if (headSway && group.current) {
             group.current.rotation.y = Math.sin(t * 0.5) * 0.05
@@ -76,8 +104,8 @@ function Model() {
 const DavidModel = () => {
     return (
         <div className="h-screen w-screen bg-slate-100">
-            <Canvas
-                camera={{ position: [0, 1.5, 4], fov: 40 }}
+            <Canvas 
+                camera={{ position: [0, 1.5, 4], fov: 40 }} 
                 shadows
                 onCreated={({ gl }) => {
                     gl.setClearColor('#f1f5f9')
@@ -85,12 +113,13 @@ const DavidModel = () => {
             >
                 <Environment preset="city" />
                 <ambientLight intensity={0.8} />
-
+                
                 <spotLight
                     color="#e7e88d"
-                    intensity={20}
-                    position={[0, 5, 5]}
-                    angle={0.6}
+                    intensity={10}
+                    position={[0, 5, 2]}
+                    angle={0.7}
+                    penumbra={0.5}
                     castShadow
                 />
 
@@ -101,7 +130,7 @@ const DavidModel = () => {
                     target={[0, 1, 0]}
                     enableDamping={true}
                 />
-
+                
                 <gridHelper args={[20, 20, 0xcccccc, 0xdddddd]} />
                 <axesHelper args={[5]} />
 
