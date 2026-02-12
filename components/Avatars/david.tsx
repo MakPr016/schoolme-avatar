@@ -1,92 +1,118 @@
 "use client"
 
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import {
-    useGLTF,
-    OrbitControls,
-    GizmoHelper,
-    GizmoViewport,
-    Environment
-} from '@react-three/drei'
+import { useGLTF, OrbitControls, Environment, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import { useControls } from 'leva'
 import * as THREE from 'three'
 
-function Model() {
-    const { scene, nodes } = useGLTF("/avatars/david.glb")
+type ModelProps = {
+    externalIsTalking: boolean
+}
+
+function Model({ externalIsTalking }: ModelProps) {
+    const { scene, nodes } = useGLTF("/avatars/david.glb") as any
     const group = useRef<THREE.Group>(null)
 
-    const { 
-        mouthOpen, 
-        blinkLeft, 
-        blinkRight, 
-        headSway,
-        isExplaining
-    } = useControls("Animation", {
+    const blinkState = useRef({
+        isBlinking: false,
+        blinkStartTime: 0,
+        nextBlinkTime: 2
+    })
+
+    const {
+        mouthOpen,
+        blinkLeft,
+        blinkRight,
+        headSway
+    } = useControls("Animation Settings", {
         mouthOpen: { value: 0, min: 0, max: 1, step: 0.01 },
         blinkLeft: { value: 0, min: 0, max: 1, step: 0.01 },
         blinkRight: { value: 0, min: 0, max: 1, step: 0.01 },
-        headSway: { value: true },
-        isExplaining: { value: true }
+        headSway: { value: true }
     })
 
     const {
         rightArmZ, rightArmX,
-        rightForeArmZ, rightForeArmY,
+        rightForeArmZ, rightForeArmX,
+        rightHandZ,
         leftArmZ, leftArmX,
-        leftForeArmZ, leftForeArmY
+        leftForeArmZ, leftForeArmX,
+        leftHandZ
     } = useControls("Arm Positioning", {
-        rightArmZ: { value: 0.35, min: -3, max: 3, step: 0.1 },
-        rightArmX: { value: 0.70, min: -3, max: 3, step: 0.1 },
-        rightForeArmZ: { value: -1.75, min: -3, max: 3, step: 0.1 },
-        rightForeArmY: { value: 0.52, min: -3, max: 3, step: 0.1 },
-        leftArmZ: { value: -0.35, min: -3, max: 3, step: 0.1 },
-        leftArmX: { value: 0.70, min: -3, max: 3, step: 0.1 },
-        leftForeArmZ: { value: 1.75, min: -3, max: 3, step: 0.1 },
-        leftForeArmY: { value: -0.52, min: -3, max: 3, step: 0.1 }
+        rightArmZ: { value: 0.0, min: -3, max: 3, step: 0.1 },
+        rightArmX: { value: 1.2, min: -3, max: 3, step: 0.1 },
+        rightForeArmZ: { value: 0.0, min: -3, max: 3, step: 0.1 },
+        rightForeArmX: { value: 0.0, min: -3, max: 3, step: 0.1 },
+        rightHandZ: { value: -0.3, min: -3, max: 3, step: 0.1 },
+
+        leftArmZ: { value: 0.0, min: -3, max: 3, step: 0.1 },
+        leftArmX: { value: 1.2, min: -3, max: 3, step: 0.1 },
+        leftForeArmZ: { value: 0.3, min: -3, max: 3, step: 0.1 },
+        leftForeArmX: { value: 0.0, min: -3, max: 3, step: 0.1 },
+        leftHandZ: { value: 0.3, min: -3, max: 3, step: 0.1 }
     })
 
     useFrame((state) => {
         const t = state.clock.getElapsedTime()
 
-        scene.traverse((child) => {
-            if (child instanceof THREE.Mesh && child.morphTargetDictionary && child.morphTargetInfluences) {
-                if (child.name === "Wolf3D_Head" || child.name === "EyeLeft" || child.name === "EyeRight") {
-                    const mL = child.morphTargetDictionary['eyeBlinkLeft']
-                    const mR = child.morphTargetDictionary['eyeBlinkRight']
-                    const mO = child.morphTargetDictionary['mouthOpen'] ?? child.morphTargetDictionary['viseme_aa']
+        const talkValue = Math.max(0, Math.sin(t * 15) * 0.5 + Math.sin(t * 5) * 0.5) * 0.8
 
-                    if (mL !== undefined) child.morphTargetInfluences[mL] = blinkLeft
-                    if (mR !== undefined) child.morphTargetInfluences[mR] = blinkRight
-                    if (mO !== undefined && child.name === "Wolf3D_Head") child.morphTargetInfluences[mO] = mouthOpen
-                }
+        let autoBlinkValue = 0
+        if (t > blinkState.current.nextBlinkTime) {
+            blinkState.current.isBlinking = true
+            blinkState.current.blinkStartTime = t
+            blinkState.current.nextBlinkTime = t + 3 + Math.random() * 5
+        }
 
-                if (child.name === "Wolf3D_Teeth" || child.name === "Wolf3D_Beard") {
-                    const mO = child.morphTargetDictionary['mouthOpen'] ?? child.morphTargetDictionary['viseme_aa']
-                    if (mO !== undefined) child.morphTargetInfluences[mO] = mouthOpen
+        if (blinkState.current.isBlinking) {
+            const blinkDuration = 0.15
+            const progress = (t - blinkState.current.blinkStartTime) / blinkDuration
+            if (progress >= 1) {
+                blinkState.current.isBlinking = false
+                autoBlinkValue = 0
+            } else {
+                autoBlinkValue = Math.sin(progress * Math.PI)
+            }
+        }
+
+        scene.traverse((child: THREE.Object3D) => {
+            if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).morphTargetDictionary && (child as THREE.Mesh).morphTargetInfluences) {
+                const mesh = child as THREE.Mesh
+                const dict = mesh.morphTargetDictionary!
+                const influences = mesh.morphTargetInfluences!
+
+                const mL = dict['eyeBlinkLeft']
+                const mR = dict['eyeBlinkRight']
+                if (mL !== undefined) influences[mL] = Math.min(1, blinkLeft + autoBlinkValue)
+                if (mR !== undefined) influences[mR] = Math.min(1, blinkRight + autoBlinkValue)
+
+                const mO = dict['mouthOpen'] ?? dict['viseme_aa']
+                if (mO !== undefined) {
+                    influences[mO] = externalIsTalking ? talkValue : mouthOpen
                 }
             }
         })
 
-        if (isExplaining) {
-            if (nodes.RightArm) {
-                nodes.RightArm.rotation.z = rightArmZ + Math.sin(t * 1) * 0.05
-                nodes.RightArm.rotation.x = rightArmX + Math.cos(t * 1) * 0.05
-            }
-            if (nodes.RightForeArm) {
-                nodes.RightForeArm.rotation.z = rightForeArmZ + Math.sin(t * 2) * 0.2
-                nodes.RightForeArm.rotation.y = rightForeArmY
-            }
-
-            if (nodes.LeftArm) {
-                nodes.LeftArm.rotation.z = leftArmZ - Math.sin(t * 1) * 0.05
-                nodes.LeftArm.rotation.x = leftArmX + Math.cos(t * 1) * 0.05
-            }
-            if (nodes.LeftForeArm) {
-                nodes.LeftForeArm.rotation.z = leftForeArmZ - Math.sin(t * 2) * 0.2
-                nodes.LeftForeArm.rotation.y = leftForeArmY
-            }
+        if (nodes.RightArm) {
+            nodes.RightArm.rotation.z = rightArmZ
+            nodes.RightArm.rotation.x = rightArmX
         }
+        if (nodes.RightForeArm) {
+            nodes.RightForeArm.rotation.z = rightForeArmZ
+            nodes.RightForeArm.rotation.x = rightForeArmX
+        }
+        if (nodes.RightHand) nodes.RightHand.rotation.z = rightHandZ
+
+        if (nodes.LeftArm) {
+            nodes.LeftArm.rotation.z = leftArmZ
+            nodes.LeftArm.rotation.x = leftArmX
+        }
+        if (nodes.LeftForeArm) {
+            nodes.LeftForeArm.rotation.z = leftForeArmZ
+            nodes.LeftForeArm.rotation.x = leftForeArmX
+        }
+        if (nodes.LeftHand) nodes.LeftHand.rotation.z = leftHandZ
 
         if (headSway && group.current) {
             group.current.rotation.y = Math.sin(t * 0.5) * 0.05
@@ -101,19 +127,21 @@ function Model() {
     )
 }
 
-const DavidModel = () => {
+type DavidModelProps = {
+    isTalking: boolean
+}
+
+const DavidModel = ({ isTalking }: DavidModelProps) => {
     return (
-        <div className="h-screen w-screen bg-slate-100">
-            <Canvas 
-                camera={{ position: [0, 1.5, 4], fov: 40 }} 
+        <div className="h-full w-full bg-background rounded-xl overflow-hidden border">
+            <Canvas
+                camera={{ position: [0, 1.5, 4], fov: 40 }}
                 shadows
-                onCreated={({ gl }) => {
-                    gl.setClearColor('#f1f5f9')
-                }}
+                onCreated={({ gl }) => { gl.setClearColor('#fff') }}
             >
                 <Environment preset="city" />
-                <ambientLight intensity={0.8} />
-                
+                <ambientLight intensity={0.6} />
+
                 <spotLight
                     color="#e7e88d"
                     intensity={10}
@@ -123,19 +151,12 @@ const DavidModel = () => {
                     castShadow
                 />
 
-                <Model />
+                <Model externalIsTalking={isTalking} />
 
-                <OrbitControls
-                    makeDefault
-                    target={[0, 1, 0]}
-                    enableDamping={true}
-                />
-                
-                <gridHelper args={[20, 20, 0xcccccc, 0xdddddd]} />
-                <axesHelper args={[5]} />
+                <OrbitControls makeDefault target={[0, 1, 0]} enableDamping={true} />
 
                 <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
-                    <GizmoViewport axisColors={['#9d4b4b', '#2f7f4f', '#3b5b9d']} labelColor="black" />
+                    <GizmoViewport axisColors={['#9d4b4b', '#2f7f4f', '#3b5b9d']} labelColor="white" />
                 </GizmoHelper>
             </Canvas>
         </div>
