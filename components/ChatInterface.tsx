@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Card } from "@/components/ui/card"
 import { AvatarMood } from "./Avatars/david"
+import { type LipSyncData, computeTimeline } from "@/lib/lipSync"
 
 type Message = {
     role: "user" | "assistant"
@@ -22,9 +23,10 @@ type ScriptItem = {
 type ChatInterfaceProps = {
     onTalkingStateChange: (isTalking: boolean) => void
     onMoodChange: (mood: AvatarMood) => void
+    lipSyncRef: React.MutableRefObject<LipSyncData>
 }
 
-export default function ChatInterface({ onTalkingStateChange, onMoodChange }: ChatInterfaceProps) {
+export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipSyncRef }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([])
     const [input, setInput] = useState("")
     const [isLoading, setIsLoading] = useState(false)
@@ -79,21 +81,49 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange }: Ch
             if (currentIndex >= script.length) {
                 onTalkingStateChange(false)
                 onMoodChange('neutral')
+                lipSyncRef.current.isActive = false
                 return
             }
             const item = script[currentIndex]
             onMoodChange(item.mood)
+
+            // Build viseme timeline for this sentence
+            const { timeline, charTimeMap, totalDuration } = computeTimeline(item.text, 1.0)
+
             const utterance = new SpeechSynthesisUtterance(item.text)
             utterance.voice = voice
             utterance.rate = 1.0
-            utterance.onstart = () => onTalkingStateChange(true)
+
+            utterance.onstart = () => {
+                onTalkingStateChange(true)
+                lipSyncRef.current = {
+                    timeline,
+                    charTimeMap,
+                    totalDuration,
+                    startTime: performance.now(),
+                    isActive: true,
+                }
+            }
+
+            // Re-calibrate lip-sync clock on every word boundary
+            utterance.onboundary = (event) => {
+                if (event.name === 'word' && lipSyncRef.current.isActive) {
+                    const timeForChar = charTimeMap[event.charIndex]
+                    if (timeForChar !== undefined) {
+                        lipSyncRef.current.startTime = performance.now() - timeForChar * 1000
+                    }
+                }
+            }
+
             utterance.onend = () => {
                 onTalkingStateChange(false)
+                lipSyncRef.current.isActive = false
                 currentIndex++
                 setTimeout(speakNext, 250) 
             }
             utterance.onerror = () => {
                 onTalkingStateChange(false)
+                lipSyncRef.current.isActive = false
                 console.error("TTS Error")
             }
             window.speechSynthesis.speak(utterance)

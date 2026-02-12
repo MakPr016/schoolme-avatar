@@ -5,6 +5,14 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { useGLTF, useAnimations, OrbitControls, Environment } from '@react-three/drei'
 import { useControls } from 'leva'
 import * as THREE from 'three'
+import {
+    type LipSyncData,
+    type VisemeName,
+    getCurrentViseme,
+    VISEME_TARGETS,
+    VISEME_INTENSITY,
+    VISEME_JAW,
+} from '@/lib/lipSync'
 
 const ANIMATIONS = {
     'None': '',
@@ -20,9 +28,10 @@ export type AvatarMood = "neutral" | "happy" | "serious" | "surprise"
 type ModelProps = {
     externalIsTalking: boolean
     currentMood: AvatarMood
+    lipSyncRef: React.RefObject<LipSyncData>
 }
 
-function Model({ externalIsTalking, currentMood }: ModelProps) {
+function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
     const { scene, nodes } = useGLTF("/avatars/david.glb") as any
     const group = useRef<THREE.Group>(null)
 
@@ -83,10 +92,12 @@ function Model({ externalIsTalking, currentMood }: ModelProps) {
 
     useFrame((state, delta) => {
         if (mixer) mixer.update(delta)
-        
-        const t = state.clock.getElapsedTime()
-        const lerpSpeed = 5 * delta
 
+        const t = state.clock.getElapsedTime()
+        const exprLerp = Math.min(1, 5 * delta)     // expressions: smooth
+        const visemeLerp = Math.min(1, 20 * delta)   // visemes: snappy
+
+        // ── Mood → expression targets (subtle values) ────────────
         let targetSmile = 0
         let targetBrowDown = 0
         let targetBrowUp = 0
@@ -94,32 +105,27 @@ function Model({ externalIsTalking, currentMood }: ModelProps) {
 
         switch (currentMood) {
             case 'happy':
-                targetSmile = 0.6
-                targetSquint = 0.3
+                targetSmile = 0.35
+                targetSquint = 0.15
                 break
             case 'serious':
-                targetBrowDown = 0.7
-                targetSquint = 0.2
-                targetSmile = 0
+                targetBrowDown = 0.35
+                targetSquint = 0.10
                 break
             case 'surprise':
-                targetBrowUp = 0.8
-                targetSmile = 0.1
+                targetBrowUp = 0.45
+                targetSmile = 0.05
                 break
             default:
                 targetSmile = 0.05
-                targetBrowDown = 0
         }
 
-        morphRefs.current.smile = THREE.MathUtils.lerp(morphRefs.current.smile, targetSmile, lerpSpeed)
-        morphRefs.current.browDown = THREE.MathUtils.lerp(morphRefs.current.browDown, targetBrowDown, lerpSpeed)
-        morphRefs.current.browUp = THREE.MathUtils.lerp(morphRefs.current.browUp, targetBrowUp, lerpSpeed)
-        morphRefs.current.squint = THREE.MathUtils.lerp(morphRefs.current.squint, targetSquint, lerpSpeed)
+        morphRefs.current.smile    = THREE.MathUtils.lerp(morphRefs.current.smile,    targetSmile,    exprLerp)
+        morphRefs.current.browDown = THREE.MathUtils.lerp(morphRefs.current.browDown, targetBrowDown, exprLerp)
+        morphRefs.current.browUp   = THREE.MathUtils.lerp(morphRefs.current.browUp,   targetBrowUp,   exprLerp)
+        morphRefs.current.squint   = THREE.MathUtils.lerp(morphRefs.current.squint,   targetSquint,   exprLerp)
 
-        const baseWave = Math.sin(t * 30) * 0.5 + 0.5
-        const randomFlutter = Math.sin(t * 12) * 0.3 + 0.7
-        const talkValue = externalIsTalking ? Math.pow(baseWave, 2) * randomFlutter * 1.2 : 0
-
+        // ── Blink ────────────────────────────────────────────────
         let autoBlinkValue = 0
         if (t > blinkState.current.nextBlinkTime) {
             blinkState.current.isBlinking = true
@@ -137,28 +143,76 @@ function Model({ externalIsTalking, currentMood }: ModelProps) {
             }
         }
 
+        // ── Lip-sync: determine current viseme ───────────────────
+        const lsData = lipSyncRef.current
+        const lipSyncActive = lsData.isActive
+        let currentViseme: VisemeName = 'sil'
+
+        if (lipSyncActive) {
+            const elapsed = (performance.now() - lsData.startTime) / 1000
+            currentViseme = getCurrentViseme(lsData.timeline, elapsed)
+        }
+
+        // Reduce smile during speech so it doesn't fight the visemes
+        const smileScale = lipSyncActive ? 0.3 : 1.0
+
+        // Subtle brow micro-movement while talking
+        const microBrow = lipSyncActive
+            ? Math.max(0, Math.sin(t * 3.5) * 0.06 + Math.sin(t * 7.1) * 0.03)
+            : 0
+
+        // ── Scene traversal: apply all morph targets ─────────────
         scene.traverse((child: THREE.Object3D) => {
-            if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).morphTargetDictionary && (child as THREE.Mesh).morphTargetInfluences) {
+            if (
+                (child as THREE.Mesh).isMesh &&
+                (child as THREE.Mesh).morphTargetDictionary &&
+                (child as THREE.Mesh).morphTargetInfluences
+            ) {
                 const mesh = child as THREE.Mesh
                 const dict = mesh.morphTargetDictionary!
-                const influences = mesh.morphTargetInfluences!
+                const infl = mesh.morphTargetInfluences!
 
-                const mL = dict['eyeBlinkLeft']; const mR = dict['eyeBlinkRight']
-                if (mL !== undefined) influences[mL] = Math.min(1, autoBlinkValue + morphRefs.current.squint)
-                if (mR !== undefined) influences[mR] = Math.min(1, autoBlinkValue + morphRefs.current.squint)
+                // ▸ Eyes – blink + squint
+                const bL = dict['eyeBlinkLeft'],  bR = dict['eyeBlinkRight']
+                if (bL !== undefined) infl[bL] = THREE.MathUtils.lerp(infl[bL], Math.min(1, autoBlinkValue + morphRefs.current.squint), visemeLerp)
+                if (bR !== undefined) infl[bR] = THREE.MathUtils.lerp(infl[bR], Math.min(1, autoBlinkValue + morphRefs.current.squint), visemeLerp)
 
-                const mOpen = dict['mouthOpen'] ?? dict['viseme_aa']
+                // ▸ Brows
+                const bdL = dict['browDownLeft'],  bdR = dict['browDownRight']
+                const bIU = dict['browInnerUp']
+                if (bdL !== undefined) infl[bdL] = THREE.MathUtils.lerp(infl[bdL], morphRefs.current.browDown, exprLerp)
+                if (bdR !== undefined) infl[bdR] = THREE.MathUtils.lerp(infl[bdR], morphRefs.current.browDown, exprLerp)
+                if (bIU !== undefined) infl[bIU] = THREE.MathUtils.lerp(infl[bIU], morphRefs.current.browUp + microBrow, exprLerp)
+
+                // ▸ Smile (attenuated while speaking)
                 const mSmile = dict['mouthSmile'] ?? dict['mouthSmileLeft']
-                
-                if (mOpen !== undefined) influences[mOpen] = talkValue
-                if (mSmile !== undefined) influences[mSmile] = morphRefs.current.smile
+                if (mSmile !== undefined) {
+                    infl[mSmile] = THREE.MathUtils.lerp(infl[mSmile], morphRefs.current.smile * smileScale, exprLerp)
+                }
 
-                const bDownL = dict['browDownLeft']; const bDownR = dict['browDownRight']
-                const bInnerUp = dict['browInnerUp']
-                
-                if (bDownL !== undefined) influences[bDownL] = morphRefs.current.browDown
-                if (bDownR !== undefined) influences[bDownR] = morphRefs.current.browDown
-                if (bInnerUp !== undefined) influences[bInnerUp] = morphRefs.current.browUp
+                // ▸ Viseme morph targets (lip sync)
+                for (const target of VISEME_TARGETS) {
+                    const idx = dict[target]
+                    if (idx !== undefined) {
+                        const vName = target.replace('viseme_', '') as VisemeName
+                        const targetVal = vName === currentViseme ? VISEME_INTENSITY[currentViseme] : 0
+                        infl[idx] = THREE.MathUtils.lerp(infl[idx], targetVal, visemeLerp)
+                    }
+                }
+
+                // ▸ Supplementary jaw open
+                const jaw = dict['jawOpen']
+                if (jaw !== undefined) {
+                    infl[jaw] = THREE.MathUtils.lerp(infl[jaw], VISEME_JAW[currentViseme], visemeLerp)
+                }
+
+                // ▸ Fallback: if model lacks viseme_* targets, drive mouthOpen
+                if (dict['viseme_aa'] === undefined) {
+                    const mOpen = dict['mouthOpen']
+                    if (mOpen !== undefined) {
+                        infl[mOpen] = THREE.MathUtils.lerp(infl[mOpen], VISEME_JAW[currentViseme] * 1.8, visemeLerp)
+                    }
+                }
             }
         })
 
@@ -193,9 +247,10 @@ function Model({ externalIsTalking, currentMood }: ModelProps) {
 type DavidModelProps = {
     isTalking: boolean
     mood: AvatarMood
+    lipSyncRef: React.RefObject<LipSyncData>
 }
 
-const DavidModel = ({ isTalking, mood }: DavidModelProps) => {
+const DavidModel = ({ isTalking, mood, lipSyncRef }: DavidModelProps) => {
     return (
         <div className="h-full w-full bg-background rounded-xl overflow-hidden border">
             <Canvas
@@ -206,7 +261,7 @@ const DavidModel = ({ isTalking, mood }: DavidModelProps) => {
                 <Environment preset="city" />
                 <ambientLight intensity={0.7} />
                 <spotLight color="#fff" intensity={8} position={[2, 5, 2]} angle={0.7} penumbra={0.5} castShadow />
-                <Model externalIsTalking={isTalking} currentMood={mood} />
+                <Model externalIsTalking={isTalking} currentMood={mood} lipSyncRef={lipSyncRef} />
                 <OrbitControls makeDefault target={[0, 2.7, 0]} enableDamping={true} minPolarAngle={Math.PI / 3} maxPolarAngle={Math.PI / 1.8} />
             </Canvas>
         </div>
