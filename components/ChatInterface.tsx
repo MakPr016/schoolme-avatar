@@ -34,29 +34,9 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
     const [messages, setMessages] = useState<Message[]>([])
     const [input, setInput] = useState("")
     const [isLoading, setIsLoading] = useState(false)
-    const [voice, setVoice] = useState<SpeechSynthesisVoice | null>(null)
     const [provider, setProvider] = useState<LLMProvider>("ollama")
     const scrollRef = useRef<HTMLDivElement>(null)
-
-    useEffect(() => {
-        const loadVoices = () => {
-            const voices = window.speechSynthesis.getVoices()
-            // Strict male voice preference chain
-            const maleKeywords = ['David', 'Mark', 'James', 'Daniel', 'George', 'Male']
-            let picked: SpeechSynthesisVoice | undefined
-            for (const kw of maleKeywords) {
-                picked = voices.find(v => v.name.includes(kw) && v.lang.startsWith('en'))
-                if (picked) break
-            }
-            // Fallback: any English voice, then any voice
-            if (!picked) picked = voices.find(v => v.lang.startsWith('en'))
-            if (!picked) picked = voices[0]
-            setVoice(picked ?? null)
-        }
-        if (window.speechSynthesis.getVoices().length > 0) loadVoices()
-        else window.speechSynthesis.onvoiceschanged = loadVoices
-        return () => { window.speechSynthesis.onvoiceschanged = null }
-    }, [])
+    const abortRef = useRef(false) // to cancel ongoing speech
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -83,63 +63,104 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
         })
     }
 
-    const playScript = (script: ScriptItem[]) => {
-        if (!window.speechSynthesis || !voice) return
-        window.speechSynthesis.cancel()
-        let currentIndex = 0
+    /** Strip markdown syntax so TTS receives clean prose. */
+    const stripMarkdown = (md: string): string => {
+        return md
+            .replace(/```[\s\S]*?```/g, ' code block omitted ')   // fenced code blocks
+            .replace(/`([^`]+)`/g, '$1')                           // inline code
+            .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')             // links / images
+            .replace(/^#{1,6}\s+/gm, '')                           // headings
+            .replace(/(\*\*|__)(.*?)\1/g, '$2')                     // bold
+            .replace(/(\*|_)(.*?)\1/g, '$2')                        // italic
+            .replace(/~~(.*?)~~/g, '$1')                            // strikethrough
+            .replace(/^\s*[-*+]\s+/gm, '')                         // unordered list bullets
+            .replace(/^\s*\d+\.\s+/gm, '')                         // ordered list numbers
+            .replace(/^\s*>\s?/gm, '')                              // blockquotes
+            .replace(/^---+$/gm, '')                                // horizontal rules
+            .replace(/\|/g, ' ')                                    // table pipes
+            .replace(/\n{2,}/g, '. ')                               // collapse blank lines into pauses
+            .replace(/\n/g, ' ')                                    // remaining newlines
+            .replace(/\s{2,}/g, ' ')                                // collapse whitespace
+            .trim()
+    }
 
-        const speakNext = () => {
-            if (currentIndex >= script.length) {
-                onTalkingStateChange(false)
-                onMoodChange('neutral')
-                lipSyncRef.current.isActive = false
-                return
+    const playScript = async (script: ScriptItem[]) => {
+        abortRef.current = false
+        console.log("📝 TTS Script:", script)
+
+        // Pre-fetch all TTS audio + timestamps in parallel
+        const ttsResults = await Promise.all(
+            script.map(item =>
+                fetch("/api/tts", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: item.text }),
+                })
+                    .then(r => r.json())
+                    .catch(() => ({ error: "TTS fetch failed" }))
+            )
+        )
+
+        // Play each sentence sequentially
+        for (let i = 0; i < script.length; i++) {
+            if (abortRef.current) break
+
+            const tts = ttsResults[i]
+            const item = script[i]
+
+            if (tts.error || !tts.audioBase64) {
+                console.error("TTS Error:", tts.error)
+                continue
             }
-            const item = script[currentIndex]
+
             onMoodChange(item.mood)
 
-            // Build viseme timeline for this sentence
-            const { timeline, charTimeMap, totalDuration } = computeTimeline(item.text, 1.0)
+            // Build viseme timeline from text (Deepgram doesn't provide character alignment)
+            const { timeline, totalDuration } = computeTimeline(item.text, 1.0)
 
-            const utterance = new SpeechSynthesisUtterance(item.text)
-            utterance.voice = voice
-            utterance.rate = 1.0
+            // Decode base64 audio → blob URL
+            const audioBytes = Uint8Array.from(atob(tts.audioBase64), c => c.charCodeAt(0))
+            const blob = new Blob([audioBytes], { type: "audio/mpeg" })
+            const url = URL.createObjectURL(blob)
+            const audio = new Audio(url)
 
-            utterance.onstart = () => {
-                onTalkingStateChange(true)
-                lipSyncRef.current = {
-                    timeline,
-                    charTimeMap,
-                    totalDuration,
-                    startTime: performance.now(),
-                    isActive: true,
-                }
-            }
-
-            // Re-calibrate lip-sync clock on every word boundary
-            utterance.onboundary = (event) => {
-                if (event.name === 'word' && lipSyncRef.current.isActive) {
-                    const timeForChar = charTimeMap[event.charIndex]
-                    if (timeForChar !== undefined) {
-                        lipSyncRef.current.startTime = performance.now() - timeForChar * 1000
+            await new Promise<void>((resolve) => {
+                audio.onplay = () => {
+                    onTalkingStateChange(true)
+                    lipSyncRef.current = {
+                        timeline,
+                        totalDuration,
+                        startTime: performance.now(),
+                        isActive: true,
+                        audioElement: audio,
                     }
                 }
-            }
+                audio.onended = () => {
+                    onTalkingStateChange(false)
+                    lipSyncRef.current.isActive = false
+                    lipSyncRef.current.audioElement = null
+                    URL.revokeObjectURL(url)
+                    resolve()
+                }
+                audio.onerror = () => {
+                    onTalkingStateChange(false)
+                    lipSyncRef.current.isActive = false
+                    lipSyncRef.current.audioElement = null
+                    URL.revokeObjectURL(url)
+                    console.error("Audio playback error")
+                    resolve()
+                }
+                audio.play().catch(() => resolve())
+            })
 
-            utterance.onend = () => {
-                onTalkingStateChange(false)
-                lipSyncRef.current.isActive = false
-                currentIndex++
-                setTimeout(speakNext, 250) 
+            // Brief pause between sentences
+            if (i < script.length - 1 && !abortRef.current) {
+                await new Promise(r => setTimeout(r, 200))
             }
-            utterance.onerror = () => {
-                onTalkingStateChange(false)
-                lipSyncRef.current.isActive = false
-                console.error("TTS Error")
-            }
-            window.speechSynthesis.speak(utterance)
         }
-        speakNext()
+
+        onTalkingStateChange(false)
+        onMoodChange("neutral")
     }
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -165,8 +186,8 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
             const textResponse = data.content
             const botMessage: Message = { role: "assistant", content: textResponse }
             setMessages(prev => [...prev, botMessage])
-            const script = analyzeText(textResponse)
-            playScript(script)
+            const script = analyzeText(stripMarkdown(textResponse))
+            await playScript(script)
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : "Connection failed."
             setMessages(prev => [...prev, { role: "assistant", content: errorMsg }])
@@ -184,7 +205,7 @@ export default function ChatInterface({ onTalkingStateChange, onMoodChange, lipS
                 </div>
                 <div className="flex-1">
                     <h2 className="text-sm font-semibold text-foreground">SchoolMe : David</h2>
-                    <p className="text-xs text-muted-foreground">{voice ? "Voice Active" : "Loading..."}</p>
+                    <p className="text-xs text-muted-foreground">Deepgram TTS</p>
                 </div>
                 <div className="flex items-center gap-1 bg-muted/50 rounded-full p-0.5">
                     <button

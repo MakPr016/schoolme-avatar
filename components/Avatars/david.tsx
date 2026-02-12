@@ -149,7 +149,10 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
         let currentViseme: VisemeName = 'sil'
 
         if (lipSyncActive) {
-            const elapsed = (performance.now() - lsData.startTime) / 1000
+            // Prefer audioElement.currentTime for frame-perfect sync
+            const elapsed = lsData.audioElement && !lsData.audioElement.paused
+                ? lsData.audioElement.currentTime
+                : (performance.now() - lsData.startTime) / 1000
             currentViseme = getCurrentViseme(lsData.timeline, elapsed)
         }
 

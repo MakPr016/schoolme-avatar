@@ -13,14 +13,14 @@ export interface VisemeEvent {
 
 export interface LipSyncData {
   timeline: VisemeEvent[]
-  charTimeMap: number[]   // text charIndex → time in timeline (for onboundary sync)
   totalDuration: number
   startTime: number       // performance.now() ms when utterance started
   isActive: boolean
+  audioElement?: HTMLAudioElement | null  // when set, elapsed = audioElement.currentTime
 }
 
 export function createLipSyncData(): LipSyncData {
-  return { timeline: [], charTimeMap: [], totalDuration: 0, startTime: 0, isActive: false }
+  return { timeline: [], totalDuration: 0, startTime: 0, isActive: false, audioElement: null }
 }
 
 // ── Character / digraph → viseme tables ──────────────────────────
@@ -114,6 +114,60 @@ export function getCurrentViseme(
   }
   // Past the end → silence
   return 'sil'
+}
+
+// ── Build timeline from ElevenLabs alignment data ────────────────
+
+export function buildTimelineFromAlignment(
+  characters: string[],
+  startTimes: number[],
+  endTimes: number[],
+): { timeline: VisemeEvent[]; totalDuration: number } {
+  const timeline: VisemeEvent[] = []
+  let i = 0
+
+  while (i < characters.length) {
+    const ch = characters[i].toLowerCase()
+
+    // Non-alphabetic → silence gap
+    if (!/[a-z]/.test(ch)) {
+      const dur = endTimes[i] - startTimes[i]
+      if (dur > 0) {
+        const last = timeline[timeline.length - 1]
+        if (last?.viseme === 'sil') { last.duration += dur }
+        else { timeline.push({ viseme: 'sil', time: startTimes[i], duration: dur }) }
+      }
+      i++
+      continue
+    }
+
+    // Try digraph
+    let viseme: VisemeName | undefined
+    let step = 1
+    if (i + 1 < characters.length) {
+      const next = characters[i + 1].toLowerCase()
+      if (/[a-z]/.test(next)) {
+        const pair = ch + next
+        const match = DIGRAPHS.find(([d]) => d === pair)
+        if (match) { viseme = match[1]; step = 2 }
+      }
+    }
+    if (!viseme) viseme = CHAR_MAP[ch] || 'sil'
+
+    const start = startTimes[i]
+    const end = endTimes[i + step - 1] ?? endTimes[i]
+    const dur = Math.max(0, end - start)
+
+    // Merge consecutive identical visemes
+    const last = timeline[timeline.length - 1]
+    if (last?.viseme === viseme) { last.duration += dur }
+    else { timeline.push({ viseme, time: start, duration: dur }) }
+
+    i += step
+  }
+
+  const totalDuration = endTimes.length > 0 ? endTimes[endTimes.length - 1] : 0
+  return { timeline, totalDuration }
 }
 
 // ── Morph-target helpers ─────────────────────────────────────────
