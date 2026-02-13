@@ -1,8 +1,8 @@
 "use client"
 
 import { useRef, useEffect } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { useGLTF, useAnimations, OrbitControls, Environment } from '@react-three/drei'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { useGLTF, useAnimations, Environment } from '@react-three/drei'
 import { useControls } from 'leva'
 import * as THREE from 'three'
 import {
@@ -94,10 +94,9 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
         if (mixer) mixer.update(delta)
 
         const t = state.clock.getElapsedTime()
-        const exprLerp = Math.min(1, 5 * delta)     // expressions: smooth
-        const visemeLerp = Math.min(1, 20 * delta)   // visemes: snappy
+        const exprLerp = Math.min(1, 5 * delta) 
+        const visemeLerp = Math.min(1, 20 * delta) 
 
-        // ── Mood → expression targets (subtle values) ────────────
         let targetSmile = 0
         let targetBrowDown = 0
         let targetBrowUp = 0
@@ -125,7 +124,6 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
         morphRefs.current.browUp   = THREE.MathUtils.lerp(morphRefs.current.browUp,   targetBrowUp,   exprLerp)
         morphRefs.current.squint   = THREE.MathUtils.lerp(morphRefs.current.squint,   targetSquint,   exprLerp)
 
-        // ── Blink ────────────────────────────────────────────────
         let autoBlinkValue = 0
         if (t > blinkState.current.nextBlinkTime) {
             blinkState.current.isBlinking = true
@@ -143,28 +141,23 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
             }
         }
 
-        // ── Lip-sync: determine current viseme ───────────────────
         const lsData = lipSyncRef.current
         const lipSyncActive = lsData.isActive
         let currentViseme: VisemeName = 'sil'
 
         if (lipSyncActive) {
-            // Prefer audioElement.currentTime for frame-perfect sync
             const elapsed = lsData.audioElement && !lsData.audioElement.paused
                 ? lsData.audioElement.currentTime
                 : (performance.now() - lsData.startTime) / 1000
             currentViseme = getCurrentViseme(lsData.timeline, elapsed)
         }
 
-        // Reduce smile during speech so it doesn't fight the visemes
         const smileScale = lipSyncActive ? 0.3 : 1.0
 
-        // Subtle brow micro-movement while talking
         const microBrow = lipSyncActive
             ? Math.max(0, Math.sin(t * 3.5) * 0.06 + Math.sin(t * 7.1) * 0.03)
             : 0
 
-        // ── Scene traversal: apply all morph targets ─────────────
         scene.traverse((child: THREE.Object3D) => {
             if (
                 (child as THREE.Mesh).isMesh &&
@@ -175,25 +168,21 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
                 const dict = mesh.morphTargetDictionary!
                 const infl = mesh.morphTargetInfluences!
 
-                // ▸ Eyes – blink + squint
                 const bL = dict['eyeBlinkLeft'],  bR = dict['eyeBlinkRight']
                 if (bL !== undefined) infl[bL] = THREE.MathUtils.lerp(infl[bL], Math.min(1, autoBlinkValue + morphRefs.current.squint), visemeLerp)
                 if (bR !== undefined) infl[bR] = THREE.MathUtils.lerp(infl[bR], Math.min(1, autoBlinkValue + morphRefs.current.squint), visemeLerp)
 
-                // ▸ Brows
                 const bdL = dict['browDownLeft'],  bdR = dict['browDownRight']
                 const bIU = dict['browInnerUp']
                 if (bdL !== undefined) infl[bdL] = THREE.MathUtils.lerp(infl[bdL], morphRefs.current.browDown, exprLerp)
                 if (bdR !== undefined) infl[bdR] = THREE.MathUtils.lerp(infl[bdR], morphRefs.current.browDown, exprLerp)
                 if (bIU !== undefined) infl[bIU] = THREE.MathUtils.lerp(infl[bIU], morphRefs.current.browUp + microBrow, exprLerp)
 
-                // ▸ Smile (attenuated while speaking)
                 const mSmile = dict['mouthSmile'] ?? dict['mouthSmileLeft']
                 if (mSmile !== undefined) {
                     infl[mSmile] = THREE.MathUtils.lerp(infl[mSmile], morphRefs.current.smile * smileScale, exprLerp)
                 }
 
-                // ▸ Viseme morph targets (lip sync)
                 for (const target of VISEME_TARGETS) {
                     const idx = dict[target]
                     if (idx !== undefined) {
@@ -203,13 +192,11 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
                     }
                 }
 
-                // ▸ Supplementary jaw open
                 const jaw = dict['jawOpen']
                 if (jaw !== undefined) {
                     infl[jaw] = THREE.MathUtils.lerp(infl[jaw], VISEME_JAW[currentViseme], visemeLerp)
                 }
 
-                // ▸ Fallback: if model lacks viseme_* targets, drive mouthOpen
                 if (dict['viseme_aa'] === undefined) {
                     const mOpen = dict['mouthOpen']
                     if (mOpen !== undefined) {
@@ -247,6 +234,17 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
     )
 }
 
+function CameraController() {
+    const { camera } = useThree()
+    
+    useEffect(() => {
+        camera.position.set(0, 3.5, 3)
+        camera.lookAt(0, 2.8, 0)
+    }, [camera])
+    
+    return null
+}
+
 type DavidModelProps = {
     isTalking: boolean
     mood: AvatarMood
@@ -261,11 +259,11 @@ const DavidModel = ({ isTalking, mood, lipSyncRef }: DavidModelProps) => {
                 shadows
                 onCreated={({ gl }) => { gl.setClearColor('#f8fafc') }}
             >
+                <CameraController />
                 <Environment preset="city" />
                 <ambientLight intensity={0.7} />
                 <spotLight color="#fff" intensity={8} position={[2, 5, 2]} angle={0.7} penumbra={0.5} castShadow />
                 <Model externalIsTalking={isTalking} currentMood={mood} lipSyncRef={lipSyncRef} />
-                <OrbitControls makeDefault target={[0, 2.7, 0]} enableDamping={true} minPolarAngle={Math.PI / 3} maxPolarAngle={Math.PI / 1.8} />
             </Canvas>
         </div>
     )
