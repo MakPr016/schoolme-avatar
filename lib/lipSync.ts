@@ -17,11 +17,68 @@ export interface LipSyncData {
   startTime: number       // performance.now() ms when utterance started
   isActive: boolean
   audioElement?: HTMLAudioElement | null  // when set, elapsed = audioElement.currentTime
+  analyser?: AnalyserNode | null          // real-time amplitude analyser
+  analyserBuffer?: Uint8Array | null      // reusable FFT buffer
 }
 
 export function createLipSyncData(): LipSyncData {
-  return { timeline: [], totalDuration: 0, startTime: 0, isActive: false, audioElement: null }
+  return {
+    timeline: [],
+    totalDuration: 0,
+    startTime: 0,
+    isActive: false,
+    audioElement: null,
+    analyser: null,
+    analyserBuffer: null,
+  }
 }
+
+// ── AudioContext amplitude analyser ──────────────────────────────
+//
+// Returns an AnalyserNode wired to the given HTMLAudioElement.
+// Call getAmplitude(analyser, buffer) each frame to read loudness.
+// Threshold ~10–15 out of 255 reliably gates silence vs speech.
+
+let sharedAudioContext: AudioContext | null = null
+
+function getAudioContext(): AudioContext {
+  if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+    sharedAudioContext = new AudioContext()
+  }
+  return sharedAudioContext
+}
+
+export function createAnalyserForAudio(
+  audio: HTMLAudioElement,
+): { analyser: AnalyserNode; buffer: Uint8Array } {
+  const ctx = getAudioContext()
+  const source = ctx.createMediaElementSource(audio)
+  const analyser = ctx.createAnalyser()
+  analyser.fftSize = 256
+  analyser.smoothingTimeConstant = 0.5   // light smoothing so pauses react quickly
+  source.connect(analyser)
+  analyser.connect(ctx.destination)      // still play audio through speakers
+  const buffer = new Uint8Array(analyser.frequencyBinCount)
+  return { analyser, buffer }
+}
+
+/**
+ * Returns the current RMS amplitude 0–255.
+ * Values below ~12 are effectively silence.
+ */
+export function getAmplitude(analyser: AnalyserNode, buffer: Uint8Array): number {
+  analyser.getByteTimeDomainData(buffer as any)
+  let sum = 0
+  for (let i = 0; i < buffer.length; i++) {
+    const x = buffer[i] - 128   // centre around 0
+    sum += x * x
+  }
+  return Math.sqrt(sum / buffer.length)
+}
+
+// Silence gate threshold — tune this if needed (0–128 scale after centring).
+// ~8 = very sensitive (open lips on faint breath), ~18 = only clear speech.
+export const SILENCE_THRESHOLD = 12
 
 // ── Character / digraph → viseme tables ──────────────────────────
 
@@ -100,6 +157,29 @@ export function computeTimeline(text: string, rate: number = 1.0) {
   }
 
   return { timeline, charTimeMap, totalDuration: time }
+}
+
+// ── Stretch timeline to match actual audio duration ───────────────
+//
+// The text-derived timeline has a nominal duration based on ~60ms/phoneme.
+// The real TTS audio may be longer or shorter. Scaling every event's `time`
+// and `duration` proportionally means audio.currentTime always lands on the
+// right viseme, fixing mid-sentence drift throughout the whole utterance.
+//
+// Call this once after computeTimeline, passing audio.duration once known.
+
+export function stretchTimeline(
+  timeline: VisemeEvent[],
+  nominalDuration: number,   // from computeTimeline's totalDuration
+  actualDuration: number,    // from audio.duration (seconds)
+): VisemeEvent[] {
+  if (nominalDuration <= 0 || actualDuration <= 0) return timeline
+  const scale = actualDuration / nominalDuration
+  return timeline.map(ev => ({
+    viseme: ev.viseme,
+    time: ev.time * scale,
+    duration: ev.duration * scale,
+  }))
 }
 
 // ── Runtime: look up current viseme from elapsed time ────────────

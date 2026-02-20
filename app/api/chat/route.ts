@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
 
 async function handleOllama(
     messages: { role: string; content: string }[],
-    model: string = "phi:latest"
+    model: string = "llama3.1:8b"
 ) {
     try {
         const res = await fetch("http://localhost:11434/api/chat", {

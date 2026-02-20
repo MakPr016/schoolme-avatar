@@ -9,6 +9,8 @@ import {
     type LipSyncData,
     type VisemeName,
     getCurrentViseme,
+    getAmplitude,
+    SILENCE_THRESHOLD,
     VISEME_TARGETS,
     VISEME_INTENSITY,
     VISEME_JAW,
@@ -85,10 +87,18 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
         nextBlinkTime: 2
     })
 
-    const armPose = {
-        rightArmZ: -0.1, rightArmX: 1.2, rightForeArmZ: -0.2, rightForeArmX: 0.1, rightHandZ: -0.6,
-        leftArmZ: 0.2, leftArmX: 1.2, leftForeArmZ: 0.0, leftForeArmX: 0.0, leftHandZ: 0.5
-    }
+    const armPose = useControls('Arm Pose', {
+        rightArmZ: { value: -0.1, min: -3.14, max: 3.14, step: 0.01 },
+        rightArmX: { value: 1.2, min: -3.14, max: 3.14, step: 0.01 },
+        rightForeArmZ: { value: -0.2, min: -3.14, max: 3.14, step: 0.01 },
+        rightForeArmX: { value: 0.1, min: -3.14, max: 3.14, step: 0.01 },
+        rightHandZ: { value: -0.6, min: -3.14, max: 3.14, step: 0.01 },
+        leftArmZ: { value: 0.2, min: -3.14, max: 3.14, step: 0.01 },
+        leftArmX: { value: 1.2, min: -3.14, max: 3.14, step: 0.01 },
+        leftForeArmZ: { value: 0.0, min: -3.14, max: 3.14, step: 0.01 },
+        leftForeArmX: { value: 0.0, min: -3.14, max: 3.14, step: 0.01 },
+        leftHandZ: { value: 0.5, min: -3.14, max: 3.14, step: 0.01 },
+    })
 
     useFrame((state, delta) => {
         if (mixer) mixer.update(delta)
@@ -149,7 +159,19 @@ function Model({ externalIsTalking, currentMood, lipSyncRef }: ModelProps) {
             const elapsed = lsData.audioElement && !lsData.audioElement.paused
                 ? lsData.audioElement.currentTime
                 : (performance.now() - lsData.startTime) / 1000
-            currentViseme = getCurrentViseme(lsData.timeline, elapsed)
+
+            const timelineViseme = getCurrentViseme(lsData.timeline, elapsed)
+
+            if (
+                lsData.analyser &&
+                lsData.analyserBuffer &&
+                timelineViseme !== 'sil'
+            ) {
+                const amplitude = getAmplitude(lsData.analyser, lsData.analyserBuffer)
+                currentViseme = amplitude >= SILENCE_THRESHOLD ? timelineViseme : 'sil'
+            } else {
+                currentViseme = timelineViseme
+            }
         }
 
         const smileScale = lipSyncActive ? 0.3 : 1.0
