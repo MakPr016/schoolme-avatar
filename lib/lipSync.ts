@@ -160,18 +160,11 @@ export function computeTimeline(text: string, rate: number = 1.0) {
 }
 
 // ── Stretch timeline to match actual audio duration ───────────────
-//
-// The text-derived timeline has a nominal duration based on ~60ms/phoneme.
-// The real TTS audio may be longer or shorter. Scaling every event's `time`
-// and `duration` proportionally means audio.currentTime always lands on the
-// right viseme, fixing mid-sentence drift throughout the whole utterance.
-//
-// Call this once after computeTimeline, passing audio.duration once known.
 
 export function stretchTimeline(
   timeline: VisemeEvent[],
-  nominalDuration: number,   // from computeTimeline's totalDuration
-  actualDuration: number,    // from audio.duration (seconds)
+  nominalDuration: number,
+  actualDuration: number,
 ): VisemeEvent[] {
   if (nominalDuration <= 0 || actualDuration <= 0) return timeline
   const scale = actualDuration / nominalDuration
@@ -192,7 +185,6 @@ export function getCurrentViseme(
   for (const ev of timeline) {
     if (elapsed >= ev.time && elapsed < ev.time + ev.duration) return ev.viseme
   }
-  // Past the end → silence
   return 'sil'
 }
 
@@ -209,7 +201,6 @@ export function buildTimelineFromAlignment(
   while (i < characters.length) {
     const ch = characters[i].toLowerCase()
 
-    // Non-alphabetic → silence gap
     if (!/[a-z]/.test(ch)) {
       const dur = endTimes[i] - startTimes[i]
       if (dur > 0) {
@@ -221,7 +212,6 @@ export function buildTimelineFromAlignment(
       continue
     }
 
-    // Try digraph
     let viseme: VisemeName | undefined
     let step = 1
     if (i + 1 < characters.length) {
@@ -238,7 +228,6 @@ export function buildTimelineFromAlignment(
     const end = endTimes[i + step - 1] ?? endTimes[i]
     const dur = Math.max(0, end - start)
 
-    // Merge consecutive identical visemes
     const last = timeline[timeline.length - 1]
     if (last?.viseme === viseme) { last.duration += dur }
     else { timeline.push({ viseme, time: start, duration: dur }) }
@@ -268,11 +257,17 @@ export const VISEME_INTENSITY: Record<VisemeName, number> = {
   aa: 0.75, E: 0.65, I: 0.55, O: 0.70, U: 0.55,
 }
 
-/** Supplementary jaw-open amount per viseme. */
+/**
+ * Supplementary jaw-open amount per viseme.
+ * Used by professor.tsx to drive jawOpen + mouthLowerDownLeft/Right
+ * independently (scaled by Leva jawOpenMax / lowerLipMax controls).
+ *
+ * Vowels open wide; bilabials (PP) close; fricatives (FF, TH, SS) stay narrow.
+ */
 export const VISEME_JAW: Record<VisemeName, number> = {
   sil: 0,
-  PP: 0,    FF: 0.03, TH: 0.06, DD: 0.08,
+  PP: 0.00, FF: 0.03, TH: 0.06, DD: 0.10,
   kk: 0.05, CH: 0.08, SS: 0.03, nn: 0.05,
-  RR: 0.08,
-  aa: 0.30, E: 0.18, I: 0.10, O: 0.25, U: 0.08,
+  RR: 0.12,
+  aa: 0.30,  E: 0.18,  I: 0.10,  O: 0.25,  U: 0.08,
 }

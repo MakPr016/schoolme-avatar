@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react"
 import ChatInterface from "@/components/ChatInterface"
-import DavidModel, { AvatarMood } from "@/components/Avatars/david"
+import ProfessorModel, { AvatarMood } from "@/components/Avatars/professor"
 import AvatarVisualizer, { type VisualizerState } from "@/components/AvatarVisualizer"
 import { type LipSyncData, createLipSyncData } from "@/lib/lipSync"
 
@@ -27,7 +27,7 @@ export default function Page() {
 
                 {/* Avatar panel */}
                 <div className="flex-1 flex flex-col relative lg:min-h-125">
-                    <DavidModel isTalking={isTalking} mood={mood} lipSyncRef={lipSyncRef} />
+                    <ProfessorModel isTalking={isTalking} mood={mood} lipSyncRef={lipSyncRef} />
 
                     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
                         <AvatarVisualizer

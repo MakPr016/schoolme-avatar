@@ -49,7 +49,6 @@ export default function AvatarVisualizer({ state, analyser }: AvatarVisualizerPr
             const dots = dotsRef.current
 
             if (state === "idle") {
-                // Static low bumps — a frozen sine snapshot at t=0
                 dots.forEach((dot, i) => {
                     if (!dot) return
                     const phase = (i / NUM_DOTS) * Math.PI * 2
@@ -58,7 +57,6 @@ export default function AvatarVisualizer({ state, analyser }: AvatarVisualizerPr
                     dot.style.height = `${h}px`
                     dot.style.opacity = "0.35"
                 })
-                // Don't loop — idle is static
                 return
             }
 
@@ -66,11 +64,9 @@ export default function AvatarVisualizer({ state, analyser }: AvatarVisualizerPr
                 const period = THINKING_PERIOD
                 dots.forEach((dot, i) => {
                     if (!dot) return
-                    // Each dot is offset by (i / N) of the period → travelling wave
                     const phase = ((elapsed % period) / period) * Math.PI * 2
                     const offset = (i / NUM_DOTS) * Math.PI * 2
-                    const norm = (Math.sin(phase - offset) + 1) / 2  // 0–1
-                    // Ease the norm so the bounce feels snappier
+                    const norm = (Math.sin(phase - offset) + 1) / 2 
                     const eased = norm < 0.5
                         ? 2 * norm * norm
                         : 1 - Math.pow(-2 * norm + 2, 2) / 2
